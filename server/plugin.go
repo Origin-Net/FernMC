@@ -386,9 +386,18 @@ func injectReplaces(pluginGoMod string, orig []byte) (restore func()) {
 	var replaces []string
 	for _, line := range strings.Split(string(srvMod), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "replace ") {
-			replaces = append(replaces, line)
+		if !strings.HasPrefix(trimmed, "replace ") {
+			continue
 		}
+		parts := strings.SplitN(trimmed, "=>", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		target := strings.TrimSpace(parts[1])
+		if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") {
+			target = filepath.Clean(filepath.Join(srvDir, target))
+		}
+		replaces = append(replaces, fmt.Sprintf("replace %s => %s", strings.TrimSpace(parts[0]), target))
 	}
 	if len(replaces) == 0 {
 		return
