@@ -383,7 +383,17 @@ func injectReplaces(pluginGoMod string, orig []byte) (restore func()) {
 	if err != nil {
 		return
 	}
+
+	var srvModule string
+	for _, line := range strings.Split(string(srvMod), "\n") {
+		if strings.HasPrefix(line, "module ") {
+			srvModule = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			break
+		}
+	}
+
 	var replaces []string
+	replaces = append(replaces, fmt.Sprintf("replace %s => %s", srvModule, srvDir))
 	for _, line := range strings.Split(string(srvMod), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "replace ") {
@@ -397,7 +407,7 @@ func injectReplaces(pluginGoMod string, orig []byte) (restore func()) {
 		if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") {
 			target = filepath.Clean(filepath.Join(srvDir, target))
 		}
-		replaces = append(replaces, fmt.Sprintf("replace %s => %s", strings.TrimSpace(parts[0]), target))
+		replaces = append(replaces, fmt.Sprintf("%s => %s", strings.TrimSpace(parts[0]), target))
 	}
 	if len(replaces) == 0 {
 		return
@@ -424,7 +434,7 @@ func buildPlugin(srcDir, output string) error {
 
 	origGoMod, _ := os.ReadFile(pluginGoMod)
 	if origGoMod == nil {
-		tmpMod := fmt.Sprintf("module __fern_plugin_%s\n\ngo 1.26\n\nrequire github.com/Origin-Net/FernMC v1.0.0\n", filepath.Base(srcDir))
+		tmpMod := fmt.Sprintf("module github.com/Origin-Net/FernMC/plugin-src/%s\n\ngo 1.26\n\nrequire github.com/Origin-Net/FernMC v1.0.0\n", filepath.Base(srcDir))
 		os.WriteFile(pluginGoMod, []byte(tmpMod), 0644)
 		defer func() {
 			os.Remove(pluginGoMod)
@@ -446,7 +456,7 @@ func buildPlugin(srcDir, output string) error {
 	tidy.Dir = srcDir
 	_ = tidy.Run()
 
-	cmd := exec.Command(goBinPath, "build", "-buildmode=plugin", "-o", output, ".")
+	cmd := exec.Command(goBinPath, "build", "-mod=mod", "-buildmode=plugin", "-o", output, ".")
 	cmd.Dir = srcDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go build failed: %w\n%s", err, string(out))
