@@ -1,13 +1,18 @@
 package server
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"plugin"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -282,47 +287,115 @@ func serverNewerThan(plPath string) bool {
 	return exeInfo.ModTime().After(plInfo.ModTime())
 }
 
+var goBinPath string
+
+func ensureGo() error {
+	if goBinPath != "" {
+		return nil
+	}
+	if p, err := exec.LookPath("go"); err == nil {
+		goBinPath = p
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable: %w", err)
+	}
+	localDir := filepath.Join(filepath.Dir(exe), "go")
+	localGo := filepath.Join(localDir, "bin", "go")
+	if _, err := os.Stat(localGo); err == nil {
+		goBinPath = localGo
+		return nil
+	}
+	slog.Info("Go not found, downloading...")
+	arch := runtime.GOARCH
+	url := fmt.Sprintf("https://go.dev/dl/go1.26.4.linux-%s.tar.gz", arch)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("download Go: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download Go: HTTP %d", resp.StatusCode)
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("decompress Go: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("extract Go: %w", err)
+		}
+		rel := strings.TrimPrefix(hdr.Name, "go/")
+		if rel == "" {
+			continue
+		}
+		target := filepath.Join(localDir, rel)
+		if hdr.FileInfo().IsDir() {
+			os.MkdirAll(target, 0755)
+			continue
+		}
+		os.MkdirAll(filepath.Dir(target), 0755)
+		f, err := os.Create(target)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", target, err)
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			f.Close()
+			return fmt.Errorf("write %s: %w", target, err)
+		}
+		f.Close()
+		os.Chmod(target, os.FileMode(hdr.Mode))
+	}
+	goBinPath = filepath.Join(localDir, "bin", "go")
+	slog.Info("Go installed", "path", goBinPath)
+	return nil
+}
+
 func buildPlugin(srcDir, output string) error {
 	pluginGoMod := filepath.Join(srcDir, "go.mod")
-	origGoMod, err := os.ReadFile(pluginGoMod)
-	if err != nil {
-		return fmt.Errorf("read plugin go.mod: %w", err)
-	}
-
-	exe, err := os.Executable()
-	if err == nil {
-		srvDir := filepath.Dir(exe)
-		if srvMod, err := os.ReadFile(filepath.Join(srvDir, "go.mod")); err == nil {
-			var replaces []string
-			for _, line := range strings.Split(string(srvMod), "\n") {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "replace ") {
-					replaces = append(replaces, line)
-				}
-			}
-			if len(replaces) > 0 {
-				needsMod := false
-				modified := string(origGoMod)
-				if !strings.HasSuffix(modified, "\n") {
-					modified += "\n"
-				}
-				for _, r := range replaces {
-					if !strings.Contains(modified, r) {
-						modified += r + "\n"
-						needsMod = true
+	if origGoMod, err := os.ReadFile(pluginGoMod); err == nil {
+		exe, exeErr := os.Executable()
+		if exeErr == nil {
+			srvDir := filepath.Dir(exe)
+			if srvMod, err := os.ReadFile(filepath.Join(srvDir, "go.mod")); err == nil {
+				var replaces []string
+				for _, line := range strings.Split(string(srvMod), "\n") {
+					trimmed := strings.TrimSpace(line)
+					if strings.HasPrefix(trimmed, "replace ") {
+						replaces = append(replaces, line)
 					}
 				}
-				if needsMod {
-					if err := os.WriteFile(pluginGoMod, []byte(modified), 0644); err != nil {
-						return fmt.Errorf("write modified go.mod: %w", err)
+				if len(replaces) > 0 {
+					modified := string(origGoMod)
+					if !strings.HasSuffix(modified, "\n") {
+						modified += "\n"
 					}
-					defer os.WriteFile(pluginGoMod, origGoMod, 0644)
+					for _, r := range replaces {
+						if !strings.Contains(modified, r) {
+							modified += r + "\n"
+						}
+					}
+					if modified != string(origGoMod) {
+						_ = os.WriteFile(pluginGoMod, []byte(modified), 0644)
+						defer os.WriteFile(pluginGoMod, origGoMod, 0644)
+					}
 				}
 			}
 		}
 	}
 
-	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", output, ".")
+	if err := ensureGo(); err != nil {
+		return fmt.Errorf("ensure Go: %w", err)
+	}
+
+	cmd := exec.Command(goBinPath, "build", "-buildmode=plugin", "-o", output, ".")
 	cmd.Dir = srcDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go build failed: %w\n%s", err, string(out))
