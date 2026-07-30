@@ -1,0 +1,26 @@
+package item
+
+import (
+	"github.com/Origin-Net/FernMC/server/world"
+)
+
+
+type Beetroot struct {
+	defaultFood
+}
+
+
+func (b Beetroot) Consume(_ *world.Tx, c Consumer) Stack {
+	c.Saturate(1, 1.2)
+	return Stack{}
+}
+
+
+func (Beetroot) CompostChance() float64 {
+	return 0.65
+}
+
+
+func (b Beetroot) EncodeItem() (name string, meta int16) {
+	return "minecraft:beetroot", 0
+}

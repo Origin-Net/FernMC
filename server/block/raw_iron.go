@@ -1,0 +1,28 @@
+package block
+
+import (
+	"github.com/Origin-Net/FernMC/server/item"
+)
+
+
+type RawIron struct {
+	solid
+	bassDrum
+}
+
+
+func (r RawIron) BreakInfo() BreakInfo {
+	return newBreakInfo(5, func(t item.Tool) bool {
+		return t.ToolType() == item.TypePickaxe && t.HarvestLevel() >= item.ToolTierStone.HarvestLevel
+	}, pickaxeEffective, oneOf(r)).withBlastResistance(30)
+}
+
+
+func (RawIron) EncodeItem() (name string, meta int16) {
+	return "minecraft:raw_iron_block", 0
+}
+
+
+func (RawIron) EncodeBlock() (string, map[string]any) {
+	return "minecraft:raw_iron_block", nil
+}

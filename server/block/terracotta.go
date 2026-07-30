@@ -1,0 +1,31 @@
+package block
+
+import "github.com/Origin-Net/FernMC/server/world"
+
+
+
+type Terracotta struct {
+	solid
+	bassDrum
+}
+
+
+func (Terracotta) SoilFor(block world.Block) bool {
+	_, ok := block.(DeadBush)
+	return ok
+}
+
+
+func (t Terracotta) BreakInfo() BreakInfo {
+	return newBreakInfo(1.25, pickaxeHarvestable, pickaxeEffective, oneOf(t)).withBlastResistance(21)
+}
+
+
+func (Terracotta) EncodeItem() (name string, meta int16) {
+	return "minecraft:hardened_clay", meta
+}
+
+
+func (Terracotta) EncodeBlock() (string, map[string]any) {
+	return "minecraft:hardened_clay", nil
+}

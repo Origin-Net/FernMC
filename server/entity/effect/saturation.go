@@ -1,0 +1,28 @@
+package effect
+
+import (
+	"github.com/Origin-Net/FernMC/server/world"
+	"image/color"
+)
+
+
+
+var Saturation saturation
+
+type saturation struct {
+	nopLasting
+}
+
+
+func (saturation) Apply(e world.Entity, eff Effect) {
+	if i, ok := e.(interface {
+		Saturate(food int, saturation float64)
+	}); ok {
+		i.Saturate(eff.Level(), 2*float64(eff.Level()))
+	}
+}
+
+
+func (saturation) RGBA() color.RGBA {
+	return color.RGBA{R: 0xf8, G: 0x24, B: 0x23, A: 0xff}
+}
