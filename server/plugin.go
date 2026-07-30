@@ -283,6 +283,45 @@ func serverNewerThan(plPath string) bool {
 }
 
 func buildPlugin(srcDir, output string) error {
+	pluginGoMod := filepath.Join(srcDir, "go.mod")
+	origGoMod, err := os.ReadFile(pluginGoMod)
+	if err != nil {
+		return fmt.Errorf("read plugin go.mod: %w", err)
+	}
+
+	exe, err := os.Executable()
+	if err == nil {
+		srvDir := filepath.Dir(exe)
+		if srvMod, err := os.ReadFile(filepath.Join(srvDir, "go.mod")); err == nil {
+			var replaces []string
+			for _, line := range strings.Split(string(srvMod), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "replace ") {
+					replaces = append(replaces, line)
+				}
+			}
+			if len(replaces) > 0 {
+				needsMod := false
+				modified := string(origGoMod)
+				if !strings.HasSuffix(modified, "\n") {
+					modified += "\n"
+				}
+				for _, r := range replaces {
+					if !strings.Contains(modified, r) {
+						modified += r + "\n"
+						needsMod = true
+					}
+				}
+				if needsMod {
+					if err := os.WriteFile(pluginGoMod, []byte(modified), 0644); err != nil {
+						return fmt.Errorf("write modified go.mod: %w", err)
+					}
+					defer os.WriteFile(pluginGoMod, origGoMod, 0644)
+				}
+			}
+		}
+	}
+
 	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", output, ".")
 	cmd.Dir = srcDir
 	if out, err := cmd.CombinedOutput(); err != nil {
