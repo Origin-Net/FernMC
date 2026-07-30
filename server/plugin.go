@@ -364,11 +364,15 @@ func ensureGo() error {
 	return nil
 }
 
-func injectReplaces(pluginGoMod string) (restore func()) {
+func injectReplaces(pluginGoMod string, orig []byte) (restore func()) {
 	restore = func() {}
-	origGoMod, err := os.ReadFile(pluginGoMod)
-	if err != nil {
-		return
+	content := orig
+	if content == nil {
+		var err error
+		content, err = os.ReadFile(pluginGoMod)
+		if err != nil {
+			return
+		}
 	}
 	exe, exeErr := os.Executable()
 	if exeErr != nil {
@@ -389,7 +393,7 @@ func injectReplaces(pluginGoMod string) (restore func()) {
 	if len(replaces) == 0 {
 		return
 	}
-	modified := string(origGoMod)
+	modified := string(content)
 	if !strings.HasSuffix(modified, "\n") {
 		modified += "\n"
 	}
@@ -398,10 +402,10 @@ func injectReplaces(pluginGoMod string) (restore func()) {
 			modified += r + "\n"
 		}
 	}
-	if modified == string(origGoMod) {
+	if modified == string(content) {
 		return
 	}
-	restore = func() { os.WriteFile(pluginGoMod, origGoMod, 0644) }
+	restore = func() { os.WriteFile(pluginGoMod, content, 0644) }
 	os.WriteFile(pluginGoMod, []byte(modified), 0644)
 	return
 }
@@ -409,21 +413,29 @@ func injectReplaces(pluginGoMod string) (restore func()) {
 func buildPlugin(srcDir, output string) error {
 	pluginGoMod := filepath.Join(srcDir, "go.mod")
 
-	var cleanup func()
-	if _, err := os.Stat(pluginGoMod); err != nil {
+	origGoMod, _ := os.ReadFile(pluginGoMod)
+	if origGoMod == nil {
 		tmpMod := fmt.Sprintf("module __fern_plugin_%s\n\ngo 1.26\n\nrequire github.com/Origin-Net/FernMC v1.0.0\n", filepath.Base(srcDir))
 		os.WriteFile(pluginGoMod, []byte(tmpMod), 0644)
-		cleanup = func() { os.Remove(pluginGoMod) }
+		defer func() {
+			os.Remove(pluginGoMod)
+			os.Remove(filepath.Join(srcDir, "go.sum"))
+		}()
+		injectReplaces(pluginGoMod, []byte(tmpMod))
 	} else {
-		cleanup = injectReplaces(pluginGoMod)
-	}
-	if cleanup != nil {
-		defer cleanup()
+		restore := injectReplaces(pluginGoMod, origGoMod)
+		if restore != nil {
+			defer restore()
+		}
 	}
 
 	if err := ensureGo(); err != nil {
 		return fmt.Errorf("ensure Go: %w", err)
 	}
+
+	tidy := exec.Command(goBinPath, "mod", "tidy")
+	tidy.Dir = srcDir
+	_ = tidy.Run()
 
 	cmd := exec.Command(goBinPath, "build", "-buildmode=plugin", "-o", output, ".")
 	cmd.Dir = srcDir
