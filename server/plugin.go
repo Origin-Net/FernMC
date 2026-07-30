@@ -289,6 +289,12 @@ func serverNewerThan(plPath string) bool {
 
 var goBinPath string
 
+var errDifferentVersion = fmt.Errorf("plugin version mismatch")
+
+func isVersionMismatch(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "built with a different version")
+}
+
 func ensureGo() error {
 	if goBinPath != "" {
 		return nil
@@ -358,37 +364,61 @@ func ensureGo() error {
 	return nil
 }
 
+func injectReplaces(pluginGoMod string) (restore func()) {
+	restore = func() {}
+	origGoMod, err := os.ReadFile(pluginGoMod)
+	if err != nil {
+		return
+	}
+	exe, exeErr := os.Executable()
+	if exeErr != nil {
+		return
+	}
+	srvDir := filepath.Dir(exe)
+	srvMod, err := os.ReadFile(filepath.Join(srvDir, "go.mod"))
+	if err != nil {
+		return
+	}
+	var replaces []string
+	for _, line := range strings.Split(string(srvMod), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "replace ") {
+			replaces = append(replaces, line)
+		}
+	}
+	if len(replaces) == 0 {
+		return
+	}
+	modified := string(origGoMod)
+	if !strings.HasSuffix(modified, "\n") {
+		modified += "\n"
+	}
+	for _, r := range replaces {
+		if !strings.Contains(modified, r) {
+			modified += r + "\n"
+		}
+	}
+	if modified == string(origGoMod) {
+		return
+	}
+	restore = func() { os.WriteFile(pluginGoMod, origGoMod, 0644) }
+	os.WriteFile(pluginGoMod, []byte(modified), 0644)
+	return
+}
+
 func buildPlugin(srcDir, output string) error {
 	pluginGoMod := filepath.Join(srcDir, "go.mod")
-	if origGoMod, err := os.ReadFile(pluginGoMod); err == nil {
-		exe, exeErr := os.Executable()
-		if exeErr == nil {
-			srvDir := filepath.Dir(exe)
-			if srvMod, err := os.ReadFile(filepath.Join(srvDir, "go.mod")); err == nil {
-				var replaces []string
-				for _, line := range strings.Split(string(srvMod), "\n") {
-					trimmed := strings.TrimSpace(line)
-					if strings.HasPrefix(trimmed, "replace ") {
-						replaces = append(replaces, line)
-					}
-				}
-				if len(replaces) > 0 {
-					modified := string(origGoMod)
-					if !strings.HasSuffix(modified, "\n") {
-						modified += "\n"
-					}
-					for _, r := range replaces {
-						if !strings.Contains(modified, r) {
-							modified += r + "\n"
-						}
-					}
-					if modified != string(origGoMod) {
-						_ = os.WriteFile(pluginGoMod, []byte(modified), 0644)
-						defer os.WriteFile(pluginGoMod, origGoMod, 0644)
-					}
-				}
-			}
-		}
+
+	var cleanup func()
+	if _, err := os.Stat(pluginGoMod); err != nil {
+		tmpMod := fmt.Sprintf("module __fern_plugin_%s\n\ngo 1.26\n\nrequire github.com/Origin-Net/FernMC v1.0.0\n", filepath.Base(srcDir))
+		os.WriteFile(pluginGoMod, []byte(tmpMod), 0644)
+		cleanup = func() { os.Remove(pluginGoMod) }
+	} else {
+		cleanup = injectReplaces(pluginGoMod)
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	if err := ensureGo(); err != nil {
